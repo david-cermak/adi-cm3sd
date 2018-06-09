@@ -41,10 +41,8 @@ import time
 import struct
 import re
 import string
-import jimterm
+#import jimterm
 import ihex
-
-SerialException = serial.serialutil.SerialException
 
 def printf(str, *args):
     print(str % args, end='')
@@ -70,6 +68,7 @@ class CM3SD(object):
         self.serial.write_timeout = 1
         self.quote_re = None
         self.enter_time = None
+        self.bl_msg = "bl_reps"
 
     def quote_raw(self, data):
         if self.quote_re is None:
@@ -99,6 +98,22 @@ class CM3SD(object):
                 break
         return bytes(line)
 
+    def grep_bl_message(self):
+        start = time.time()
+        msg_pos = 0
+        c = b''
+        while (time.time() - start) <= 5:
+            c = self.serial.read(1)
+            if len(c) == 1: 
+                #print(c)
+                if self.bl_msg[msg_pos] == chr(c[0]):
+                    msg_pos = msg_pos + 1
+                    if msg_pos == len(self.bl_msg):
+                        return True
+                else:
+                    msg_pos = 0
+        return False
+        
     def open(self):
         """Initialize communication with device"""
 
@@ -110,9 +125,15 @@ class CM3SD(object):
                 while self.serial.read(1):
                     pass
                 self.serial.flushInput()
-                self.serial.write(int2byte(0x08))
+                while True:
+                    self.serial.write(int2byte(0x08))
+                    if self.grep_bl_message():
+                        break
                 response = self.readuntil(100, [b'\r\n', b'\n\r'])
-                if len(response) == 24:
+                printf(response)
+                if len(response) >= 21:
+                    response += b'      ' # extra chars for some possibly shorter ids
+                    response = response[:24]
                     ident = struct.unpack('15s3s4s2s', response)
                     # ident[0] is typically 'ADuCRF101  128 '
                     if ident[0].startswith(b'ADuC'):
@@ -140,7 +161,7 @@ class CM3SD(object):
                self.quote_raw(ident[1]))
         self.enter_time = time.time()
 
-    def command(self, cmd, value, data = b'', timeout = 1.0, expect = 0x06):
+    def command(self, cmd, value, data = b'', timeout = 20.0, expect = 0x06):
         """Send a command to the device and return the response byte"""
 
         if len(cmd) != 1 or value < 0 or value > 0xffffffff:
@@ -156,9 +177,12 @@ class CM3SD(object):
         out += int2byte(checksum)
 
         # Send command
+        start = time.time()
         self.serial.write(out)
 
         # Wait for response
+        if not self.grep_bl_message():
+            raise CM3SDError("Failed to find msg start seq")
         start = time.time()
         while (time.time() - start) <= timeout:
             c = self.serial.read(1)
@@ -199,9 +223,16 @@ class CM3SD(object):
             print("Skipping empty file %s" % hexfile)
             return
         minaddr = min(ih.areas.keys())
+        eraseaddr = (minaddr&0xFFFFFE00)
         maxaddr = max(map(lambda x: x[0] + len(x[1]), ih.areas.items())) - 1
-        printf("File: %s (%d bytes, 0x%08x-0x%08x)\n",
-               hexfile.name, size, minaddr, maxaddr)
+        maxeraseaddr = (maxaddr&0xFFFFFE00)+0x200
+        printf("File: %s (%d bytes, 0x%08x-0x%08x), erase(0x%08x-0x%08x)\n",
+               hexfile.name, size, minaddr, maxaddr, eraseaddr, maxeraseaddr)
+        pages = b'\x01'
+        while eraseaddr <  maxeraseaddr:
+            printf("\rErasing... %d", eraseaddr)
+            ret = self.command('E', eraseaddr, pages)
+            eraseaddr = eraseaddr + 0x200
 
         def chunked(data, size):
             for i in range(0, len(data), size):
@@ -211,9 +242,9 @@ class CM3SD(object):
         # Flash each contiguous area
         for (addr, data) in ih.areas.items():
             # Break into chunks of up to 250 bytes
-            for (offset, chunk) in chunked(data, 250):
+            for (offset, chunk) in chunked(data, 248):
                 # Write this chunk
-                printf("\rFlashing... %d/%d", written, size)
+                printf("\rFlashing... %d/%d | %x %x %x |", written, size, addr, offset, len(chunk))
                 ret = self.command('W', addr + offset, chunk)
                 written += len(chunk)
         printf("\rFlashing... %d/%d ok\n", written, size)
@@ -261,16 +292,18 @@ if __name__ == "__main__":
     # Only need to use the subclassed Serial if we're opening
     # a terminal afterwards.
     if args.terminal:
-        serial = jimterm.MySerial(args.device, 9600)
+#        serial = jimterm.MySerial(args.device, 9600)
+        pass
     else:
-        serial = serial.Serial(args.device, 9600)
+        ser = serial.Serial(args.device, 115200)
+
 
     # Sometimes the baudrate seems to not get set properly; this may
     # be a Linux cdc-acm driver bug.  Changing it helps.
-    serial.setBaudrate(38400)
-    serial.setBaudrate(args.baudrate)
+    # ser.setBaudrate(38400)
+    # ser.setBaudrate(args.baudrate)
 
-    cm3sd = CM3SD(serial)
+    cm3sd = CM3SD(ser)
     if args.write or args.erase or args.reset:
         cm3sd.open()
 
@@ -284,7 +317,7 @@ if __name__ == "__main__":
     if args.reset:
         cm3sd.reset()
 
-    if args.terminal:
-        term = jimterm.Jimterm([serial], raw = not sys.stdout.isatty())
-        term.print_header([args.device], [args.baudrate], sys.stderr)
-        term.run()
+    # if args.terminal:
+    #     term = jimterm.Jimterm([serial], raw = not sys.stdout.isatty())
+    #     term.print_header([args.device], [args.baudrate], sys.stderr)
+    #     term.run()
