@@ -102,7 +102,7 @@ class CM3SD(object):
         start = time.time()
         msg_pos = 0
         c = b''
-        while (time.time() - start) <= 5:
+        while (time.time() - start) <= 1:
             c = self.serial.read(1)
             if len(c) == 1: 
                 #print(c)
@@ -161,7 +161,7 @@ class CM3SD(object):
                self.quote_raw(ident[1]))
         self.enter_time = time.time()
 
-    def command(self, cmd, value, data = b'', timeout = 20.0, expect = 0x06):
+    def command(self, cmd, value, data = b'', timeout = 1.0, expect = 0x06):
         """Send a command to the device and return the response byte"""
 
         if len(cmd) != 1 or value < 0 or value > 0xffffffff:
@@ -267,8 +267,6 @@ if __name__ == "__main__":
     group = parser.add_argument_group("Actions",
                                       ("Actions are performed "
                                        "in the order listed below."))
-    group.add_argument("--erase", "-e", action="store_true",
-                       help="Bulk erase")
     group.add_argument("--write", "-w", metavar="HEX", default=[],
                        type=argparse.FileType('r'), action='append',
                        help="Hex file to write (may be repeated)")
@@ -277,17 +275,13 @@ if __name__ == "__main__":
     group.add_argument("--terminal", "-t", action="store_true",
                        help="Interactive terminal")
 
-    group.add_argument("--all", "-a", metavar="HEX",
-                       type=argparse.FileType('r'),
-                       help="Same as -e -w HEX -r -t")
-
     args = parser.parse_args()
 
-    if args.all:
-        args.erase = True
-        args.write.append(args.all)
-        args.reset = True
-        args.terminal = True
+#    if args.all:
+#        args.erase = True
+#        args.write.append(args.all)
+#        args.reset = True
+#        args.terminal = True
 
     # Only need to use the subclassed Serial if we're opening
     # a terminal afterwards.
@@ -307,8 +301,8 @@ if __name__ == "__main__":
     if args.write or args.erase or args.reset:
         cm3sd.open()
 
-    if args.erase:
-        cm3sd.erase()
+    # if args.erase:
+    #     cm3sd.erase()
 
     if args.write is not None:
         for hexfile in args.write:
